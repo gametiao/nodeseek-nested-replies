@@ -2,7 +2,7 @@
 // @name         NodeSeek 楼中楼
 // @name:en      NodeSeek Nested Replies
 // @namespace    https://www.nodeseek.com/
-// @version      0.8.2
+// @version      0.8.3
 // @description  将同一帖子内（含跨页）的回复整理为紧凑、可开关的楼中楼。
 // @description:en Group same-thread NodeSeek replies, including later pages, into compact toggleable threads.
 // @author       NodeSeek community
@@ -43,7 +43,7 @@
     renderDelayMs: 40,
   });
 
-  const SCRIPT_VERSION = '0.8.2';
+  const SCRIPT_VERSION = '0.8.3';
   const PREFIX = 'ns-nested-replies';
   const STORAGE_KEY = 'ns-nested-replies:enabled';
   const STYLE_ID = `${PREFIX}-style`;
@@ -1334,7 +1334,13 @@
     return localEntries;
   }
 
-  function resolveEntryPlacement(entry, targetByFloor, entryByFloor, currentPage) {
+  function resolveEntryPlacement(
+    entry,
+    targetByFloor,
+    entryByFloor,
+    currentPage,
+    earliestOrdinaryLocalFloor,
+  ) {
     const visited = new Set([entry.floor]);
     let target = targetByFloor.get(entry.floor);
     let reachesEarlierPage = false;
@@ -1347,6 +1353,15 @@
 
       const targetEntry = entryByFloor.get(target);
       if (!targetEntry) {
+        if (
+          entry.source === 'local'
+          && !entry.pinned
+          && currentPage > 1
+          && earliestOrdinaryLocalFloor !== null
+          && target < earliestOrdinaryLocalFloor
+        ) {
+          reachesEarlierPage = true;
+        }
         break;
       }
       if (targetEntry.source === 'local') {
@@ -1401,6 +1416,12 @@
       }
 
       const allEntries = Array.from(entryByFloor.values()).sort((a, b) => a.floor - b.floor);
+      const ordinaryLocalFloors = localEntries
+        .filter((entry) => !entry.pinned)
+        .map((entry) => entry.floor);
+      const earliestOrdinaryLocalFloor = ordinaryLocalFloors.length > 0
+        ? Math.min(...ordinaryLocalFloors)
+        : null;
       const targetByFloor = new Map();
       const metadataByFloor = new Map();
 
@@ -1419,6 +1440,7 @@
           targetByFloor,
           entryByFloor,
           postInfo.page,
+          earliestOrdinaryLocalFloor,
         );
         if (!placement) {
           continue;

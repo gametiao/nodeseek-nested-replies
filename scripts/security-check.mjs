@@ -37,6 +37,7 @@ const requiredPatterns = [
   ['cross-realm element helper', /function isElementNode\(value, expectedLocalName = null\)[\s\S]*value\.nodeType === Node\.ELEMENT_NODE/],
   ['cross-realm source-node validation', /!isElementNode\(sourceItem, 'li'\)/],
   ['cross-realm reply-anchor validation', /\(child\) => isElementNode\(child, 'a'\)/],
+  ['unloaded earlier-page reply suppression', /target < earliestOrdinaryLocalFloor[\s\S]*reachesEarlierPage = true/],
   ['native menu node adoption', /document\.adoptNode\(sourceItem\)/],
   ['native profile card reuse', /const card = window\.hoverCard/],
   ['native card method validation', /typeof card\.loadUser !== 'function'[\s\S]*typeof card\.show !== 'function'/],
