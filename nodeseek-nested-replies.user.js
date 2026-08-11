@@ -2,7 +2,7 @@
 // @name         NodeSeek 楼中楼
 // @name:en      NodeSeek Nested Replies
 // @namespace    https://www.nodeseek.com/
-// @version      0.8.3
+// @version      0.8.4
 // @description  将同一帖子内（含跨页）的回复整理为紧凑、可开关的楼中楼。
 // @description:en Group same-thread NodeSeek replies, including later pages, into compact toggleable threads.
 // @author       NodeSeek community
@@ -43,7 +43,7 @@
     renderDelayMs: 40,
   });
 
-  const SCRIPT_VERSION = '0.8.3';
+  const SCRIPT_VERSION = '0.8.4';
   const PREFIX = 'ns-nested-replies';
   const STORAGE_KEY = 'ns-nested-replies:enabled';
   const STYLE_ID = `${PREFIX}-style`;
@@ -982,10 +982,13 @@
   }
 
   function findFloorTarget(floor) {
-    const nested = state.commentList?.querySelector(
-      `.${CHILD_CLASS}[${FLOOR_ATTRIBUTE}="${floor}"]`,
+    const mirrorOrNested = state.commentList?.querySelector(
+      `[${MIRROR_ATTRIBUTE}][${FLOOR_ATTRIBUTE}="${floor}"],`
+      + `.${CHILD_CLASS}[${FLOOR_ATTRIBUTE}="${floor}"]`,
     );
-    return isElementNode(nested) ? nested : document.getElementById(String(floor));
+    return isElementNode(mirrorOrNested)
+      ? mirrorOrNested
+      : document.getElementById(String(floor));
   }
 
   function revealFloor(floor, shouldScroll = true) {
@@ -1182,6 +1185,45 @@
     });
   }
 
+  function createPinnedMirrorEntry(entry, metadata = null) {
+    const mirrorItem = entry.item.cloneNode(true);
+    mirrorItem.removeAttribute('id');
+    mirrorItem.setAttribute(MIRROR_ATTRIBUTE, 'true');
+    mirrorItem.setAttribute(FLOOR_ATTRIBUTE, String(entry.floor));
+    mirrorItem.querySelectorAll('[id]').forEach((element) => element.removeAttribute('id'));
+    return {
+      ...entry,
+      item: mirrorItem,
+      source: 'mirror',
+      pinned: false,
+      originalItem: entry.item,
+      metadata,
+    };
+  }
+
+  function createPinnedRootMirror(entry) {
+    const mirrorEntry = createPinnedMirrorEntry(entry);
+    installMirrorActionProxy(mirrorEntry.item, entry.item);
+    installExpandedAvatarCardProxy(mirrorEntry.item);
+    return mirrorEntry;
+  }
+
+  function insertPinnedRootMirror(commentList, mirrorEntry, localEntries) {
+    const nextEntry = localEntries
+      .filter((entry) => (
+        !entry.pinned
+        && entry.floor > mirrorEntry.floor
+        && entry.item.parentElement === commentList
+      ))
+      .sort((a, b) => a.floor - b.floor)[0];
+
+    if (nextEntry) {
+      commentList.insertBefore(mirrorEntry.item, nextEntry.item);
+    } else {
+      commentList.append(mirrorEntry.item);
+    }
+  }
+
   function decorateChild(entry, replyMetadata, entryByFloor) {
     const { item, floor, originalItem } = entry;
     item.classList.add(CHILD_CLASS);
@@ -1305,6 +1347,7 @@
 
   function restoreLocalItems(commentList) {
     commentList.querySelectorAll(`[${REMOTE_ATTRIBUTE}]`).forEach((item) => item.remove());
+    commentList.querySelectorAll(`[${MIRROR_ATTRIBUTE}]`).forEach((item) => item.remove());
 
     const discoveredItems = Array.from(commentList.querySelectorAll('.content-item[id]'))
       .filter((item) => item instanceof HTMLElement && !item.hasAttribute(REMOTE_ATTRIBUTE));
@@ -1365,8 +1408,9 @@
         break;
       }
       if (targetEntry.source === 'local') {
-        if (targetEntry.pinned) {
-          return null;
+        if (targetEntry.pinned && targetByFloor.has(target)) {
+          target = targetByFloor.get(target);
+          continue;
         }
         return {
           rootFloor: target,
@@ -1434,6 +1478,20 @@
       }
 
       const childrenByRoot = new Map();
+      const pinnedRootMirrors = new Map();
+      const ensurePinnedRootMirror = (rootEntry) => {
+        if (!pinnedRootMirrors.has(rootEntry.floor)) {
+          pinnedRootMirrors.set(rootEntry.floor, createPinnedRootMirror(rootEntry));
+        }
+        return pinnedRootMirrors.get(rootEntry.floor);
+      };
+
+      for (const entry of localEntries) {
+        if (entry.pinned && !targetByFloor.has(entry.floor)) {
+          ensurePinnedRootMirror(entry);
+        }
+      }
+
       for (const entry of allEntries) {
         const placement = resolveEntryPlacement(
           entry,
@@ -1457,28 +1515,22 @@
         }
 
         const rootEntry = entryByFloor.get(rootFloor);
-        if (!rootEntry || rootEntry.source !== 'local' || rootEntry.pinned) {
+        if (!rootEntry || rootEntry.source !== 'local') {
           continue;
+        }
+        if (rootEntry.pinned) {
+          ensurePinnedRootMirror(rootEntry);
         }
 
         let childEntry = entry;
         if (placement.mirror) {
-          const mirrorItem = entry.item.cloneNode(true);
-          mirrorItem.removeAttribute('id');
-          mirrorItem.setAttribute(MIRROR_ATTRIBUTE, 'true');
-          mirrorItem.querySelectorAll('[id]').forEach((element) => element.removeAttribute('id'));
-          const mirrorMetadata = getReplyMetadata(mirrorItem, postInfo.postId);
+          const mirrorEntry = createPinnedMirrorEntry(entry);
+          const mirrorMetadata = getReplyMetadata(mirrorEntry.item, postInfo.postId);
           if (!mirrorMetadata) {
             continue;
           }
-          childEntry = {
-            ...entry,
-            item: mirrorItem,
-            source: 'mirror',
-            pinned: false,
-            originalItem: entry.item,
-            metadata: mirrorMetadata,
-          };
+          mirrorEntry.metadata = mirrorMetadata;
+          childEntry = mirrorEntry;
         }
 
         const children = childrenByRoot.get(rootFloor) || [];
@@ -1488,15 +1540,24 @@
 
       for (const [rootFloor, childEntries] of childrenByRoot) {
         const rootEntry = entryByFloor.get(rootFloor);
-        if (!rootEntry || rootEntry.source !== 'local' || rootEntry.pinned) {
+        if (!rootEntry || rootEntry.source !== 'local') {
           continue;
         }
 
         const thread = createThread(rootFloor, childEntries, metadataByFloor, entryByFloor);
         if (thread) {
-          rootEntry.item.append(thread);
+          const rootItem = rootEntry.pinned
+            ? ensurePinnedRootMirror(rootEntry).item
+            : rootEntry.item;
+          rootItem.append(thread);
         }
       }
+
+      Array.from(pinnedRootMirrors.values())
+        .sort((a, b) => a.floor - b.floor)
+        .forEach((mirrorEntry) => {
+          insertPinnedRootMirror(commentList, mirrorEntry, localEntries);
+        });
       installTopLevelThreadControls(commentList);
       revealRequestedFloor();
     } finally {
